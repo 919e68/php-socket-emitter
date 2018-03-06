@@ -5,5 +5,7 @@
   $socket->emit('serverEvent', 'DataFromClient');
 
   $socket->on('clientEvent', function($data) {
-    var_dump($data);
+    echo 'ClientEvent: ' . $data . PHP_EOL;
   });
+
+  $socket->listen();

@@ -5,10 +5,9 @@
 
   $socket->on('connect', function($client) {
     echo 'client connected id=' . $client->id . PHP_EOL;
-
-    $client->on('serverEvent', function($data) {
-      var_dump($data);
-    });
+    // $client->on('serverEvent', function($data) {
+    //   echo 'ServerEvent: ' . $data . PHP_EOL;
+    // });
 
     $client->emit('clientEvent', 'DataFromServer');
   });
