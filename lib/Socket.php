@@ -1,15 +1,16 @@
 <?php
+  /* Socket Class */
   class Socket {
 
     public $host;
     public $port;
-    public $socket;
     public $sockRead = [];
-    public $clients = [];
-    public $clientCount = 0;
-    public $clientIPCount = [];
-    public $maxClients = 100;
-    public $maxClientPerIP = 20;
+    private $clients = [];
+    private $clientCount = 0;
+    private $clientIPCount = [];
+    private $maxClients = 100;
+    private $maxClientPerIP = 20;
+    public $events = [];
     public $logging = true;
 
     public function __construct($host, $port) {
@@ -47,7 +48,6 @@
 
       $write = null;
       $except = null;
-
       while (true) {
         $changed = $this->sockRead;
         if (socket_select($changed, $write, $except, 0) < 1) {
@@ -55,7 +55,7 @@
         }
 
         foreach ($changed as $socketId => $socket) {
-          // client socket messages
+          // client socket updates
           if ($socketId != 0) {
             $data = '';
   					$bytes = @socket_recv($socket, $data, 4096, 0);
@@ -63,23 +63,17 @@
 
             if ($bytes === false) {
               $this->removeClient($socketId);
-              if ($this->logging) {
-                echo 'client disconnected: ip=' . $client['ip']  . ', id=' . $client['id'] . PHP_EOL;
-              }
-              continue;
+            } elseif ($bytes > 0) {
+              echo $data . PHP_EOL;
+              // $this->processSocketMessage($socketId, $data);
+            } else {
+              $this->removeClient($socketId);
             }
-
-            echo 'message from client: ' . $data . PHP_EOL;
 
           // server socket change (client trying to connect)
           } else {
             $spawn = socket_accept($this->sockRead[0]);
             $socketIdFromAdd = $this->addClient($spawn);
-            if ($spawn && $this->logging) {
-              socket_write($spawn, 'msg from server');
-              socket_getpeername($spawn, $ip);
-              echo "client connected: ip={$ip}, id={$socketIdFromAdd}" . PHP_EOL;
-            }
           }
         }
       }
@@ -97,21 +91,38 @@
 
   		$socketId = $this->getNextClientId();
       $this->sockRead[$socketId] = $socket;
-  		$this->clients[$socketId] = [
-        'id'     => $socketId,
-        'ip'     => $clientIP,
-        'socket' => $socket
-      ];
+
+      $socketClient = new SocketConnectedClient();
+      $socketClient->id = $socketId;
+      $socketClient->ip = $clientIP;
+      $socketClient->socket = $socket;
+      $socketClient->server = $this->sockRead[0];
+  		$this->clients[$socketId] = $socketClient;
+
+      // begin: on connection event
+      if (array_key_exists('connect', $this->events)) {
+        call_user_func($this->events['connect'], $this->clients[$socketId]);
+      }
+      // end: on connection event
 
       return $socketId;
     }
 
     public function removeClient($socketId) {
       $client = $this->clients[$socketId];
-      $socket = $client['socket'];
+      $socket = $client->socket;
       socket_close($socket);
 
-      $clientIP = $client['ip'];
+      // begin: on disconnect event
+      if (array_key_exists('disconnect', $this->events)) {
+        $socketClient = new SocketConnectedClient();
+        $socketClient->id = $client->id;
+        $socketClient->ip = $client->ip;
+        call_user_func($this->events['disconnect'], $socketClient);
+      }
+      // end: on disconnect event
+
+      $clientIP = $client->ip;
       if ($this->clientIPCount[$clientIP] > 1) {
         $this->clientIPCount[$clientIP]--;
       } else {
@@ -123,11 +134,107 @@
       unset($this->sockRead[$socketId]);
     }
 
-    public function getNextClientId() {
+    private function getNextClientId() {
       $i = 1;
       while (isset($this->sockRead[$i])) {
         $i++;
       }
       return $i;
+    }
+
+    public function processSocketMessage($socketId, $data) {
+      $dataArr = explode("***emitter-data/***", $data);
+      if (count($dataArr) == 2) {
+        $emitter = str_replace('***emitter/***', '', $dataArr[0]);
+        $emitter = str_replace('***/emitter***', '', $emitter);
+        $emitterData = str_replace('***/emitter-data***', '', $dataArr[1]);
+
+        // begin: emitter
+        $client = $this->clients[$socketId];
+        if (array_key_exists($emitter, $client->events)) {
+          call_user_func($client->events[$emitter], $emitterData);
+        }
+        // end: emitter
+      }
+    }
+
+    public function on($event, $callback) {
+      $this->events[$event] = $callback;
+    }
+  }
+
+  /* SocketConnectedClient Class */
+  class SocketConnectedClient {
+    public $id;
+    public $ip;
+    public $server;
+    public $socket;
+    public $events = [];
+
+    public function __construct() {
+
+    }
+
+    public function on($event, $callback) {
+      $this->events[$event] = $callback;
+    }
+
+    public function emit($event, $data) {
+      $sockMsg = "***emitter/***${event}***/emitter***";
+      $sockMsg .= "***emitter-data/***$data***/emitter-data***";
+      socket_write($this->socket, $sockMsg);
+    }
+
+    public function disconnect() {
+      // $this->server->removeClient($this->id);
+    }
+  }
+
+  /* SocketClient Class */
+  class SocketClient {
+    public $host;
+    public $port;
+    public $server;
+    public $events = [];
+
+    public function __construct($host, $port) {
+      $this->host = $host;
+      $this->port = $port;
+      $this->server = fsockopen($host, $port);
+
+      $dataFromServer = '';
+      while (!feof($this->server)) {
+        $dataFromServer .= fread($this->server, 4);
+        if (substr($dataFromServer, -19) == '***/emitter-data***') {
+          $this->processSocketMessage($dataFromServer);
+          $dataFromServer = '';
+        }
+      }
+    }
+
+    public function emit($event, $data) {
+      $sockMsg = "***emitter/***${event}***/emitter***";
+      $sockMsg .= "***emitter-data/***$data***/emitter-data***";
+      fwrite($this->server, $sockMsg);
+    }
+
+    public function processSocketMessage($socketId, $data) {
+      $dataArr = explode("***emitter-data/***", $data);
+      if (count($dataArr) == 2) {
+        $emitter = str_replace('***emitter/***', '', $dataArr[0]);
+        $emitter = str_replace('***/emitter***', '', $emitter);
+        $emitterData = str_replace('***/emitter-data***', '', $dataArr[1]);
+
+        // begin: emitter
+        $client = $this->clients[$socketId];
+        if (array_key_exists($emitter, $client->events)) {
+          call_user_func($client->events[$emitter], $emitterData);
+        }
+        // end: emitter
+      }
+    }
+
+    public function on($event, $callback) {
+      // $this->events[$event] = $callback;
     }
   }
