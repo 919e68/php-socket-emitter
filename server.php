@@ -1,19 +1,18 @@
 <?php
-  require './lib/Socket.php';
+  require 'autoload.php';
 
   $socket = new Socket('127.0.0.1', 7000);
 
-  $socket->on('connect', function($client) {
-    echo 'client connected id=' . $client->id . PHP_EOL;
-    // $client->on('serverEvent', function($data) {
-    //   echo 'ServerEvent: ' . $data . PHP_EOL;
-    // });
-
-    $client->emit('clientEvent', 'DataFromServer');
+  $socket->on('connect', function($id) {
+    echo 'client connected ' . $id . PHP_EOL;
   });
 
-  $socket->on('disconnect', function($client) {
-    echo 'client disconnected id=' . $client->id . PHP_EOL;
+  $socket->on('message', function($data, $id) {
+    echo 'message from (' . $id .'): ' . $data;
+  });
+
+  $socket->on('disconnect', function($id) {
+    echo 'client disconnected ' . $id . PHP_EOL;
   });
 
   $socket->listen();
