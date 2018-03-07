@@ -57,6 +57,7 @@
         //   $this->onMessage($bufferFromServer);
         //   $bufferFromServer = '';
         // }
+        <message><type></type><name></name><data></data></message>
       }
 
       if ()
